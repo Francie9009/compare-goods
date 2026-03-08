@@ -1,3 +1,5 @@
-streamlit
-pdfplumber
-python-docx
+try:
+    import pdfplumber
+    PDF_OK = True
+except ImportError:
+    PDF_OK = False
