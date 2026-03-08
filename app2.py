@@ -255,7 +255,7 @@ if st.button("🔍 開始比對", type="primary", disabled=not (file_a and file_
     for cls, res in comparison.items():
         has_diff = res["only_a"] or res["only_b"] or res["similar"]
         icon = "✅" if not has_diff else "⚠️"
-        with st.expander(f"{icon}  {cls}", expanded=has_diff):
+        with st.expander(f"{icon}  {cls}", expanded=bool(has_diff)):
             if res["similar"]:
                 st.markdown(f"**⚠️ 相似但不完全相同 — {len(res['similar'])} 項**")
                 for a_item, b_item, ratio in res["similar"]:
