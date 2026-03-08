@@ -5,10 +5,13 @@ import re
 import difflib
 from io import BytesIO
 
+
 st.set_page_config(page_title="商品服務比對工具", page_icon="🔍", layout="wide")
 st.title("🔍 商品/服務名稱比對工具")
-st.caption("上傳兩份檔案（PDF 或 Word），自動抽取商品服務名稱並逐項比對差異。")
+st.caption("上傳檔案（PDF 或 Word）或直接貼上文字，自動比對商品服務名稱差異。")
 
+
+# ══ 文字抽取 ══════════════════════════════════════════════════════════════════
 
 def extract_text_from_pdf(file_bytes):
     import pdfplumber
@@ -48,6 +51,8 @@ def extract_text(uploaded_file):
         return extract_text_from_docx(data)
     return data.decode("utf-8", errors="ignore")
 
+
+# ══ 解析商品服務 ══════════════════════════════════════════════════════════════
 
 NOISE_PREFIXES = [
     "intellectual property", "trademark", "batch", "official journal",
@@ -99,6 +104,8 @@ def parse_goods_services(text):
     return result
 
 
+# ══ 比對 ══════════════════════════════════════════════════════════════════════
+
 def normalize(s):
     s = s.lower().strip()
     s = re.sub(r'\s+', ' ', s)
@@ -137,6 +144,8 @@ def compare_all(parsed_a, parsed_b):
     return {cls: compare_items(parsed_a.get(cls, []), parsed_b.get(cls, [])) for cls in all_cls}
 
 
+# ══ Word 報告 ═════════════════════════════════════════════════════════════════
+
 def build_word_report(name_a, name_b, comparison):
     from docx import Document
     from docx.shared import Pt, RGBColor
@@ -169,8 +178,7 @@ def build_word_report(name_a, name_b, comparison):
 
     for cls, res in comparison.items():
         doc.add_heading(cls, level=1)
-        has_diff = res["only_a"] or res["only_b"] or res["similar"]
-
+        has_diff = bool(res["only_a"] or res["only_b"] or res["similar"])
         if not has_diff:
             p = doc.add_paragraph(f'✅ 完全相同（{len(res["same"])} 項）')
             p.runs[0].font.color.rgb = RGBColor(0x27, 0xAE, 0x60)
@@ -188,21 +196,17 @@ def build_word_report(name_a, name_b, comparison):
                     row.cells[1].text = b_item
                     row.cells[2].text = f'{int(ratio*100)}%'
                 doc.add_paragraph('')
-
             if res["only_a"]:
                 doc.add_heading(f'➕ 只在 {name_a} 有 — {len(res["only_a"])} 項', level=2)
                 for item in res["only_a"]:
                     p = doc.add_paragraph(f'• {item}')
                     p.runs[0].font.color.rgb = RGBColor(0xC0, 0x39, 0x2B)
-
             if res["only_b"]:
                 doc.add_heading(f'➕ 只在 {name_b} 有 — {len(res["only_b"])} 項', level=2)
                 for item in res["only_b"]:
                     p = doc.add_paragraph(f'• {item}')
                     p.runs[0].font.color.rgb = RGBColor(0x1A, 0x5C, 0x2A)
-
             doc.add_paragraph(f'（相同項目：{len(res["same"])} 項）')
-
         doc.add_paragraph('')
 
     buf = BytesIO()
@@ -212,22 +216,46 @@ def build_word_report(name_a, name_b, comparison):
 
 # ══ UI ═══════════════════════════════════════════════════════════════════════
 
+def input_panel(label, key_prefix):
+    """回傳 (text, display_name)"""
+    st.subheader(f"📄 {label}")
+    display_name = st.text_input("標籤名稱", value=label, key=f"{key_prefix}_name")
+    mode = st.radio("輸入方式", ["上傳檔案", "貼上文字"], key=f"{key_prefix}_mode", horizontal=True)
+
+    text = ""
+    if mode == "上傳檔案":
+        f = st.file_uploader(
+            "上傳 PDF 或 Word",
+            type=["pdf", "docx"],
+            key=f"{key_prefix}_file"
+        )
+        if f:
+            with st.spinner("抽取文字中..."):
+                try:
+                    text = extract_text(f)
+                    st.success(f"✅ 已抽取文字（{len(text)} 字元）")
+                except Exception as e:
+                    st.error(f"抽取失敗：{e}")
+    else:
+        text = st.text_area(
+            "直接貼上文字內容",
+            height=250,
+            placeholder="貼上商品服務名稱，支援分號或換行分隔，例如：\nCLASS 29\nAlmond milk; Butter; Cheese\nCLASS 35\nAdvertising services; Marketing consultant",
+            key=f"{key_prefix}_text"
+        )
+
+    return text, display_name
+
+
 col1, col2 = st.columns(2)
 with col1:
-    st.subheader("📄 檔案 A")
-    file_a = st.file_uploader("上傳檔案 A（PDF 或 Word）", type=["pdf", "docx"], key="fa")
-    name_a = st.text_input("標籤名稱", value="A", key="na")
-
+    text_a, name_a = input_panel("檔案 A", "a")
 with col2:
-    st.subheader("📄 檔案 B")
-    file_b = st.file_uploader("上傳檔案 B（PDF 或 Word）", type=["pdf", "docx"], key="fb")
-    name_b = st.text_input("標籤名稱", value="B", key="nb")
+    text_b, name_b = input_panel("檔案 B", "b")
 
-if st.button("🔍 開始比對", type="primary", disabled=not (file_a and file_b)):
-    with st.spinner("抽取文字中..."):
-        text_a = extract_text(file_a)
-        text_b = extract_text(file_b)
+st.divider()
 
+if st.button("🔍 開始比對", type="primary", disabled=not (text_a and text_b)):
     with st.spinner("解析商品服務項目..."):
         parsed_a = parse_goods_services(text_a)
         parsed_b = parse_goods_services(text_b)
@@ -235,9 +263,8 @@ if st.button("🔍 開始比對", type="primary", disabled=not (file_a and file_
     with st.spinner("比對中..."):
         comparison = compare_all(parsed_a, parsed_b)
 
-    st.divider()
+    # 摘要
     st.subheader("📊 比對摘要")
-
     total_same    = sum(len(v["same"])    for v in comparison.values())
     total_only_a  = sum(len(v["only_a"])  for v in comparison.values())
     total_only_b  = sum(len(v["only_b"])  for v in comparison.values())
@@ -250,12 +277,13 @@ if st.button("🔍 開始比對", type="primary", disabled=not (file_a and file_
     m4.metric(f"➕ 只在 {name_b} 有", total_only_b)
 
     st.divider()
-    st.subheader("📋 逐項比對結果")
 
+    # 逐項
+    st.subheader("📋 逐項比對結果")
     for cls, res in comparison.items():
-        has_diff = res["only_a"] or res["only_b"] or res["similar"]
+        has_diff = bool(res["only_a"] or res["only_b"] or res["similar"])
         icon = "✅" if not has_diff else "⚠️"
-        with st.expander(f"{icon}  {cls}", expanded=bool(has_diff)):
+        with st.expander(f"{icon}  {cls}", expanded=has_diff):
             if res["similar"]:
                 st.markdown(f"**⚠️ 相似但不完全相同 — {len(res['similar'])} 項**")
                 for a_item, b_item, ratio in res["similar"]:
@@ -278,9 +306,10 @@ if st.button("🔍 開始比對", type="primary", disabled=not (file_a and file_
                 st.info(f"相同項目：{len(res['same'])} 項")
 
     st.divider()
+
+    # 下載
     st.subheader("📥 下載報告")
     dl1, dl2 = st.columns(2)
-
     with dl1:
         try:
             word_bytes = build_word_report(name_a, name_b, comparison)
@@ -313,8 +342,8 @@ if st.button("🔍 開始比對", type="primary", disabled=not (file_a and file_
             mime="text/plain"
         )
 
-elif not file_a or not file_b:
-    st.info("請上傳兩份檔案後點「開始比對」。")
+elif not text_a or not text_b:
+    st.info("請輸入兩份內容後點「開始比對」。")
 
 st.divider()
-st.caption("商品/服務名稱比對工具 ｜ 支援 PDF / Word")
+st.caption("商品/服務名稱比對工具 ｜ 支援 PDF / Word / 直接貼文字")
