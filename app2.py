@@ -58,7 +58,7 @@ NOISE_PREFIXES = [
     "intellectual property", "trademark", "batch", "official journal",
     "notification", "registrar", "page ", "pg.", "dec ", "jan ", "feb ",
     "mar ", "apr ", "may ", "jun ", "jul ", "aug ", "sep ", "oct ",
-    "nov ", "class ",
+    "nov ",
 ]
 
 
@@ -74,8 +74,14 @@ def is_noise(s):
 
 
 def parse_items(body):
-    body = re.sub(r'\s+', ' ', body).strip()
-    raw = re.split(r'[;；]\s*|\n+', body)
+    """切割項目，支援分號、換行、逗號+換行"""
+    body = re.sub(r'[ \t]+', ' ', body).strip()
+    # 先試分號切割
+    if ';' in body or '；' in body:
+        raw = re.split(r'[;；]\s*', body)
+    else:
+        # 沒分號就用換行切割
+        raw = body.splitlines()
     items = []
     for item in raw:
         item = item.strip().strip(".,，。 ")
@@ -85,6 +91,10 @@ def parse_items(body):
 
 
 def parse_goods_services(text):
+    """
+    優先嘗試以 CLASS XX 分組。
+    若無 CLASS 標籤，直接把所有項目放入「（全部）」。
+    """
     result = {}
     class_pattern = re.compile(
         r'CLASS\s+(\d+)(.*?)(?=CLASS\s+\d+|\Z)',
@@ -98,9 +108,10 @@ def parse_goods_services(text):
             if items:
                 result[cls] = items
     else:
+        # 沒有 CLASS 標籤 → 全部直接比對
         items = parse_items(text)
         if items:
-            result["（未分類）"] = items
+            result["（全部）"] = items
     return result
 
 
@@ -110,6 +121,8 @@ def normalize(s):
     s = s.lower().strip()
     s = re.sub(r'\s+', ' ', s)
     s = s.replace('，', ',').replace('；', ';').replace('／', '/')
+    # 移除括號內補充說明再比對（保留原始顯示）
+    s = re.sub(r'\s*[\(\[（【][^\)\]）】]*[\)\]）】]', '', s).strip()
     return s
 
 
@@ -217,33 +230,26 @@ def build_word_report(name_a, name_b, comparison):
 # ══ UI ═══════════════════════════════════════════════════════════════════════
 
 def input_panel(label, key_prefix):
-    """回傳 (text, display_name)"""
     st.subheader(f"📄 {label}")
     display_name = st.text_input("標籤名稱", value=label, key=f"{key_prefix}_name")
     mode = st.radio("輸入方式", ["上傳檔案", "貼上文字"], key=f"{key_prefix}_mode", horizontal=True)
-
     text = ""
     if mode == "上傳檔案":
-        f = st.file_uploader(
-            "上傳 PDF 或 Word",
-            type=["pdf", "docx"],
-            key=f"{key_prefix}_file"
-        )
+        f = st.file_uploader("上傳 PDF 或 Word", type=["pdf", "docx"], key=f"{key_prefix}_file")
         if f:
             with st.spinner("抽取文字中..."):
                 try:
                     text = extract_text(f)
-                    st.success(f"✅ 已抽取文字（{len(text)} 字元）")
+                    st.success(f"✅ 已抽取（{len(text)} 字元）")
                 except Exception as e:
                     st.error(f"抽取失敗：{e}")
     else:
         text = st.text_area(
             "直接貼上文字內容",
-            height=250,
-            placeholder="貼上商品服務名稱，支援分號或換行分隔，例如：\nCLASS 29\nAlmond milk; Butter; Cheese\nCLASS 35\nAdvertising services; Marketing consultant",
+            height=300,
+            placeholder="支援兩種格式：\n\n【有CLASS標籤】\nCLASS 29\nAlmond milk; Butter\nCLASS 35\nAdvertising services\n\n【無CLASS標籤，直接貼清單】\nAlmond milk\nButter\nCheese",
             key=f"{key_prefix}_text"
         )
-
     return text, display_name
 
 
@@ -259,6 +265,16 @@ if st.button("🔍 開始比對", type="primary", disabled=not (text_a and text_
     with st.spinner("解析商品服務項目..."):
         parsed_a = parse_goods_services(text_a)
         parsed_b = parse_goods_services(text_b)
+
+    # 若一邊有CLASS分組、一邊沒有 → 都拍平成「（全部）」直接比
+    has_class_a = any(k.startswith("Class ") for k in parsed_a)
+    has_class_b = any(k.startswith("Class ") for k in parsed_b)
+    if has_class_a != has_class_b:
+        all_a = [item for items in parsed_a.values() for item in items]
+        all_b = [item for items in parsed_b.values() for item in items]
+        parsed_a = {"（全部）": all_a}
+        parsed_b = {"（全部）": all_b}
+        st.info("ℹ️ 其中一份沒有 CLASS 標籤，已改為直接逐項比對（不分組）。")
 
     with st.spinner("比對中..."):
         comparison = compare_all(parsed_a, parsed_b)
@@ -301,7 +317,7 @@ if st.button("🔍 開始比對", type="primary", disabled=not (text_a and text_
                 for item in res["only_b"]:
                     st.success(f"• {item}")
             if not has_diff:
-                st.success(f"此 Class 兩份文件完全相同（{len(res['same'])} 項）")
+                st.success(f"此分組兩份文件完全相同（{len(res['same'])} 項）")
             else:
                 st.info(f"相同項目：{len(res['same'])} 項")
 
@@ -321,7 +337,6 @@ if st.button("🔍 開始比對", type="primary", disabled=not (text_a and text_
             )
         except Exception as e:
             st.error(f"Word 報告產生失敗：{e}")
-
     with dl2:
         lines = [f"比對報告\nA：{name_a}\nB：{name_b}\n" + "="*60]
         for cls, res in comparison.items():
